@@ -22,6 +22,7 @@ import {
 } from './feature-flags';
 import { IERC721, IStakingRewards, IERC20 } from '../../build/abi-interfaces';
 import { stakeTypeThatCanHaveUnclaimedRewardsStakedTo } from './stake-types';
+import { getWeaponNameFromSeed } from '@/weapon-name';
 
 const defaultCallOptions = (state: IState) => ({ from: state.defaultAccount });
 
@@ -105,9 +106,11 @@ export function createStore(web3: Web3) {
 
       characters: {},
       characterStaminas: {},
+      characterRenames: {},
       weapons: {},
       currentWeaponId: null,
       weaponDurabilities: {},
+      weaponRenames: {},
       maxDurability: 0,      isInCombat: false,
       isCharacterViewExpanded: localStorage.getItem('isCharacterViewExpanded') ? localStorage.getItem('isCharacterViewExpanded') === 'true' : true,
 
@@ -178,8 +181,11 @@ export function createStore(web3: Web3) {
         };
       },
 
-      getCharacterName() {
+      getCharacterName(state: IState) {
         return (characterId: number) => {
+          if(state.characterRenames[characterId] !== undefined){
+            return state.characterRenames[characterId];
+          }
           return getCharacterNameFromSeed(characterId);
         };
       },
@@ -187,6 +193,12 @@ export function createStore(web3: Web3) {
       getCharacterStamina(state: IState) {
         return (characterId: number) => {
           return state.characterStaminas[characterId];
+        };
+      },
+
+      getCharacterRename(state: IState) {
+        return (characterId: number) => {
+          return state.characterRenames[characterId];
         };
       },
 
@@ -201,7 +213,20 @@ export function createStore(web3: Web3) {
           return state.weaponDurabilities[weaponId];
         };
       },
+      getWeaponRename(state: IState) {
+        return (weaponId: number) => {
+          return state.weaponRenames[weaponId];
+        };
+      },
+      getWeaponName(state: IState) {
+        return (weaponId: number, stars: number) => {
+          if(state.weaponRenames[weaponId] !== undefined) {
+            return state.weaponRenames[weaponId];
+          }
 
+          return getWeaponNameFromSeed(weaponId, stars);
+        };
+      },
       getExchangeUrl() {
         return 'https://app.apeswap.finance/swap?outputCurrency=0x154a9f9cbd3449ad22fdae23044319d6ef2a1fab';
       },
@@ -506,10 +531,20 @@ export function createStore(web3: Web3) {
       updateWeaponDurability(state: IState, { weaponId, durability }) {
         Vue.set(state.weaponDurabilities, weaponId, durability);
       },
+      updateWeaponRename(state: IState, { weaponId, renameString }) {
+        console.log('rename for ' + weaponId + ' is ' + renameString);
+        if(renameString !== undefined){
+          Vue.set(state.weaponRenames, weaponId, renameString);
+        }
+      },
       updateCharacterStamina(state: IState, { characterId, stamina }) {
         Vue.set(state.characterStaminas, characterId, stamina);
       },
-
+      updateCharacterRename(state: IState, { characterId, renameString }) {
+        if(renameString !== undefined){
+          Vue.set(state.characterRenames, characterId, renameString);
+        }
+      },
       updateTargets(state: IState, { characterId, weaponId, targets }) {
         if (!state.targetsByCharacterIdAndWeaponId[characterId]) {
           Vue.set(state.targetsByCharacterIdAndWeaponId, characterId, {});
@@ -555,7 +590,9 @@ export function createStore(web3: Web3) {
         await dispatch('pollAccountsAndNetwork');
 
         await dispatch('setupCharacterStaminas');
+        await dispatch('setupCharacterRenames');
         await dispatch('setupWeaponDurabilities');
+        await dispatch('setupWeaponRenames');
       },
 
       async pollAccountsAndNetwork({ state, dispatch, commit }) {
@@ -987,6 +1024,27 @@ export function createStore(web3: Web3) {
         }
       },
 
+      async setupWeaponRenames({ state, dispatch }) {
+        const [
+          ownedWeaponIds
+        ] = await Promise.all([
+          state.contracts().CryptoBlades!.methods.getMyWeapons().call(defaultCallOptions(state))
+        ]);
+
+        for (const weapId of ownedWeaponIds) {
+          dispatch('fetchWeaponRename', weapId);
+        }
+      },
+
+      async fetchWeaponRename({ state, commit }, weaponId: number) {
+        const renameString = await state.contracts().WeaponRenameTagConsumables!.methods
+          .getWeaponRename(weaponId)
+          .call(defaultCallOptions(state));
+        if(renameString !== '' && state.weaponRenames[weaponId] !== renameString){
+          commit('updateWeaponRename', { weaponId, renameString });
+        }
+      },
+
       async setupCharacterStaminas({ state, dispatch }) {
         const [
           ownedCharacterIds
@@ -998,7 +1056,6 @@ export function createStore(web3: Web3) {
           dispatch('fetchCharacterStamina', charId);
         }
       },
-
       async fetchCharacterStamina({ state, commit }, characterId: number) {
         if(featureFlagStakeOnly) return;
 
@@ -1011,7 +1068,25 @@ export function createStore(web3: Web3) {
           commit('updateCharacterStamina', { characterId, stamina });
         }
       },
+      async setupCharacterRenames({ state, dispatch }) {
+        const [
+          ownedCharacterIds
+        ] = await Promise.all([
+          state.contracts().CryptoBlades!.methods.getMyCharacters().call(defaultCallOptions(state))
+        ]);
 
+        for (const charId of ownedCharacterIds) {
+          dispatch('fetchCharacterRename', charId);
+        }
+      },
+      async fetchCharacterRename({ state, commit }, characterId: number) {
+        const renameString = await state.contracts().CharacterRenameTagConsumables!.methods
+          .getCharacterRename(characterId)
+          .call(defaultCallOptions(state));
+        if(renameString !== '' && state.characterRenames[characterId] !== renameString){
+          commit('updateCharacterRename', { characterId, renameString });
+        }
+      },
       async mintCharacter({ state, dispatch }) {
         if(featureFlagStakeOnly || !state.defaultAccount) return;
 
@@ -1818,7 +1893,86 @@ export function createStore(web3: Web3) {
         if(!Shields || !state.defaultAccount) return;
 
         return await Shields.methods.totalSupply().call(defaultCallOptions(state));
-      }
+      },
+
+      async fetchTotalRenameTags({ state }) {
+        const { CharacterRenameTagConsumables } = state.contracts();
+        if(!CharacterRenameTagConsumables || !state.defaultAccount) return;
+        return await CharacterRenameTagConsumables.methods.getItemCount().call(defaultCallOptions(state));
+      },
+      async purchaseRenameTag({ state, dispatch }) {
+        const { CryptoBlades, SkillToken, CharacterRenameTagConsumables, Blacksmith } = state.contracts();
+        if(!CryptoBlades || !CharacterRenameTagConsumables || !state.defaultAccount) return;
+
+        await SkillToken.methods
+          .approve(CryptoBlades.options.address, web3.utils.toWei('100', 'ether'))
+          .send({
+            from: state.defaultAccount
+          });
+
+        await Blacksmith.methods.purchaseCharacterRenameTag().send({
+          from: state.defaultAccount,
+          gas: '500000'
+        });
+
+        await Promise.all([
+          dispatch('fetchTotalRenameTags')
+        ]);
+      },
+      async renameCharacter({ state, dispatch}, {id, name}) {
+        const { CryptoBlades, SkillToken, CharacterRenameTagConsumables } = state.contracts();
+        if(!CryptoBlades || !SkillToken || !CharacterRenameTagConsumables || !state.defaultAccount) return;
+
+        await CharacterRenameTagConsumables.methods
+          .renameCharacter(id, name)
+          .send({
+            from: state.defaultAccount,
+            gas: '5000000'
+          });
+
+        await Promise.all([
+          dispatch('fetchCharacterRename', id)
+        ]);
+      },
+      async fetchTotalWeaponRenameTags({ state }) {
+        const { WeaponRenameTagConsumables } = state.contracts();
+        if(!WeaponRenameTagConsumables || !state.defaultAccount) return;
+        return await WeaponRenameTagConsumables.methods.getItemCount().call(defaultCallOptions(state));
+      },
+      async purchaseWeaponRenameTag({ state, dispatch }) {
+        const { CryptoBlades, SkillToken, WeaponRenameTagConsumables, Blacksmith } = state.contracts();
+        if(!CryptoBlades || !WeaponRenameTagConsumables || !state.defaultAccount) return;
+
+        await SkillToken.methods
+          .approve(CryptoBlades.options.address, web3.utils.toWei('100', 'ether'))
+          .send({
+            from: state.defaultAccount
+          });
+
+        await Blacksmith.methods.purchaseWeaponRenameTag().send({
+          from: state.defaultAccount,
+          gas: '500000'
+        });
+
+        await Promise.all([
+          dispatch('fetchTotalRenameTags')
+        ]);
+      },
+      async renameWeapon({ state, dispatch}, {id, name}) {
+        const { CryptoBlades, SkillToken, WeaponRenameTagConsumables } = state.contracts();
+        if(!CryptoBlades || !SkillToken || !WeaponRenameTagConsumables || !state.defaultAccount) return;
+
+        await WeaponRenameTagConsumables.methods
+          .renameWeapon(id, name)
+          .send({
+            from: state.defaultAccount,
+            gas: '5000000'
+          });
+
+        await Promise.all([
+          dispatch('fetchWeaponRename', id)
+        ]);
+      },
     }
   });
 }

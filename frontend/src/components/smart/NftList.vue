@@ -6,12 +6,17 @@ import { Nft } from '@/views/Market.vue';
       <span>Nothing to buy at this time</span>
     </div>
     <ul v-if="isShop" class="nft-grid">
-      <li class="nft" v-for="nft in nfts" :key="nft.nftType + nft.nftId">
+      <li class="nft" v-for="nft in nfts" :key="nft.nftType + nft.nftId"
+      v-tooltip.top="{ content: itemDescriptionHtml(nft) , trigger: (isMobile() ? 'click' : 'hover') }"
+                      @mouseover="hover = !isMobile() || true"
+                      @mouseleave="hover = !isMobile()"
+                      >
         <nft-icon :nft="nft" :isShop="isShop"/>
+
         <b-button
           variant="primary"
           class="shop-button"
-          @click="onShieldBuy()">
+          @click="buyItem(nft)">
           <span class="gtag-link-others" tagname="forge_weapon">
             Buy ({{ nft.nftPrice }} SKILL)
           </span>
@@ -27,8 +32,10 @@ import { Nft } from '@/views/Market.vue';
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import { mapActions, mapGetters } from 'vuex';
+import {Nft as nftItem} from '../../interfaces/Nft';
+import { SkillShopListing } from '../../interfaces/SkillShopListing';
 import NftIcon from '../NftIcon.vue';
 
 const sorts = [
@@ -68,14 +75,29 @@ export default {
 
     nonIgnoredNfts() {
       return this.displayNfts;
-    },
+    }
   },
 
   methods: {
-    ...mapActions(['purchaseShield']),
-
+    ...mapActions(['purchaseShield', 'purchaseRenameTag', 'purchaseWeaponRenameTag']),
     async onShieldBuy() {
       await this.purchaseShield();
+    },
+    async buyItem(item: nftItem) {
+      if(item.nftType === 'shield'){
+        await this.purchaseShield();
+      }
+
+      if(item.nftType === 'CharacterRenameTag'){
+        await this.purchaseRenameTag();
+      }
+
+      if(item.nftType === 'WeaponRenameTag'){
+        await this.purchaseWeaponRenameTag();
+      }
+    },
+    itemDescriptionHtml(item: SkillShopListing): string {
+      return item.name + '<br>' + item.description;
     }
   }
 };
